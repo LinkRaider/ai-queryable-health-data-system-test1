@@ -1,7 +1,7 @@
 import re
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -84,7 +84,20 @@ class Granularity(StrEnum):
 
 
 class QueryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "metric": "heart_rate_bpm",
+                "user_ids": ["user-0001"],
+                "activity_states": ["rest"],
+                "aggregation": "avg",
+                "granularity": "day",
+                "group_by_user": False,
+                "limit": 100,
+            }
+        },
+    )
 
     metric: Literal["heart_rate_bpm"] = "heart_rate_bpm"
     start_time: datetime | None = None
@@ -132,14 +145,55 @@ class QueryRequest(BaseModel):
         return start, end
 
 
+class QueryResultRow(BaseModel):
+    bucket: datetime
+    user_id: str | None = None
+    value: float
+    sample_count: int
+
+
 class QueryResponse(BaseModel):
-    query: dict[str, Any]
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "query": {
+                    "metric": "heart_rate_bpm",
+                    "start_time": "2026-10-18T12:00:00Z",
+                    "end_time": "2026-10-19T12:00:00Z",
+                    "user_ids": ["user-0001"],
+                    "activity_states": ["rest"],
+                    "aggregation": "avg",
+                    "granularity": "day",
+                    "group_by_user": False,
+                    "limit": 100,
+                },
+                "row_count": 1,
+                "rows": [
+                    {
+                        "bucket": "2026-10-19T00:00:00Z",
+                        "value": 81.96,
+                        "sample_count": 42,
+                    }
+                ],
+            }
+        }
+    )
+
+    query: QueryRequest
     row_count: int
-    rows: list[dict[str, Any]]
+    rows: list[QueryResultRow]
 
 
 class NaturalLanguageQueryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "question": "What was my average resting heart rate by day over the last week?",
+                "user_id": "user-0001",
+            }
+        },
+    )
 
     question: str = Field(min_length=3, max_length=1000)
     user_id: str | None = Field(default=None, pattern=r"^user-\d{4}$")
@@ -162,9 +216,38 @@ class NaturalLanguagePlan(BaseModel):
 
 
 class NaturalLanguageQueryResponse(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "question": "What was my average resting heart rate last week?",
+                "model": "qwen2.5:0.5b",
+                "interpretation": {
+                    "metric": "heart_rate_bpm",
+                    "start_time": "2026-10-12T12:00:00Z",
+                    "end_time": "2026-10-19T12:00:00Z",
+                    "user_ids": ["user-0001"],
+                    "activity_states": ["rest"],
+                    "aggregation": "avg",
+                    "granularity": "day",
+                    "group_by_user": False,
+                    "limit": 1000,
+                },
+                "sql": "SELECT ... FROM measurements WHERE ...",
+                "row_count": 1,
+                "rows": [
+                    {
+                        "bucket": "2026-10-19T00:00:00Z",
+                        "value": 81.96,
+                        "sample_count": 42,
+                    }
+                ],
+            }
+        }
+    )
+
     question: str
     model: str
     interpretation: QueryRequest
     sql: str
     row_count: int
-    rows: list[dict[str, Any]]
+    rows: list[QueryResultRow]
