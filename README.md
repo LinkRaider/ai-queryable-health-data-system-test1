@@ -1,5 +1,7 @@
 # AI-Queryable Health Data System
 
+[Challenge brief (PDF)](docs/ai-queryable-health-data-system_challenge.pdf)
+
 A small end-to-end system that generates realistic synthetic heart-rate events, streams
 them through Redpanda, ingests them idempotently into partitioned PostgreSQL tables, and
 exposes safe structured and natural-language aggregate query APIs.
