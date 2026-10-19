@@ -179,7 +179,9 @@ The consumer provides at-least-once delivery: it validates a polled batch, commi
 database transaction, publishes invalid records to the DLQ, and only then commits Kafka
 offsets. A crash before the offset commit replays the batch; deterministic event IDs and
 `ON CONFLICT DO NOTHING` prevent duplicate stored events. Producer idempotence also protects
-against retries inside a Kafka session.
+against retries inside a Kafka session. A failure after a DLQ publish but before offset
+commit can replay an invalid record into the DLQ; each DLQ envelope carries source topic,
+partition, and offset so production consumers can deduplicate it.
 
 ### PostgreSQL as storage and query engine
 
@@ -243,6 +245,10 @@ docker compose build api
 docker compose run --rm --no-deps api pytest
 docker compose run --rm --no-deps api ruff check src tests
 ```
+
+The unit suite includes failure-window tests proving that database failure prevents DLQ
+publication and offset commit, and that DLQ acknowledgment or offset-commit failure leaves
+the Kafka batch replayable.
 
 Run the end-to-end check against a running stack. It covers ingestion, the structured API,
 and a real local-model natural-language query:

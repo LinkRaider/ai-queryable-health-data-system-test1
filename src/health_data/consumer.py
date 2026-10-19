@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
@@ -13,6 +14,12 @@ from health_data.logging_config import configure_logging
 from health_data.models import HealthMetricEvent
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BatchOutcome:
+    valid_count: int
+    invalid_count: int
 
 
 def parse_record(record: ConsumerRecord) -> HealthMetricEvent:
@@ -28,6 +35,42 @@ def dlq_payload(record: ConsumerRecord, error: ValidationError) -> bytes:
         "original_value": record.value.decode(errors="replace"),
     }
     return json.dumps(payload, default=str, separators=(",", ":")).encode()
+
+
+async def process_batch(
+    *,
+    pool: Any,
+    records: list[ConsumerRecord],
+    dlq_producer: AIOKafkaProducer,
+    consumer: AIOKafkaConsumer,
+    dlq_topic: str,
+) -> BatchOutcome:
+    valid_events: list[HealthMetricEvent] = []
+    invalid_records: list[tuple[ConsumerRecord, ValidationError]] = []
+    for record in records:
+        try:
+            valid_events.append(parse_record(record))
+        except ValidationError as error:
+            invalid_records.append((record, error))
+
+    await store_events(pool, valid_events)
+
+    dlq_acks: list[asyncio.Future] = []
+    for record, error in invalid_records:
+        acknowledgement = await dlq_producer.send(
+            dlq_topic,
+            key=record.key,
+            value=dlq_payload(record, error),
+        )
+        dlq_acks.append(acknowledgement)
+    if dlq_acks:
+        await asyncio.gather(*dlq_acks)
+
+    await consumer.commit()
+    return BatchOutcome(
+        valid_count=len(valid_events),
+        invalid_count=len(invalid_records),
+    )
 
 
 async def run() -> None:
@@ -65,40 +108,30 @@ async def run() -> None:
             if not records:
                 continue
 
-            valid_events: list[HealthMetricEvent] = []
-            dlq_acks: list[asyncio.Future] = []
-            for record in records:
-                try:
-                    valid_events.append(parse_record(record))
-                except ValidationError as error:
-                    acknowledgement = await dlq_producer.send(
-                        settings.kafka_dlq_topic,
-                        key=record.key,
-                        value=dlq_payload(record, error),
-                    )
-                    dlq_acks.append(acknowledgement)
-
             started_at = asyncio.get_running_loop().time()
-            await store_events(pool, valid_events)
-            if dlq_acks:
-                await asyncio.gather(*dlq_acks)
-            await consumer.commit()
+            outcome = await process_batch(
+                pool=pool,
+                records=records,
+                dlq_producer=dlq_producer,
+                consumer=consumer,
+                dlq_topic=settings.kafka_dlq_topic,
+            )
             duration_ms = int((asyncio.get_running_loop().time() - started_at) * 1000)
             logger.info(
                 "batch ingested",
                 extra={
                     "event": "batch_ingested",
-                    "count": len(valid_events),
+                    "count": outcome.valid_count,
                     "duration_ms": duration_ms,
                     "topic": settings.kafka_topic,
                 },
             )
-            if dlq_acks:
+            if outcome.invalid_count:
                 logger.warning(
                     "invalid events routed to dead-letter topic",
                     extra={
                         "event": "events_dead_lettered",
-                        "count": len(dlq_acks),
+                        "count": outcome.invalid_count,
                         "topic": settings.kafka_dlq_topic,
                     },
                 )

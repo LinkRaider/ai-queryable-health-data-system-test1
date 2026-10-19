@@ -51,6 +51,9 @@ def test_query_defaults_to_last_24_hours() -> None:
             "start_time": "2026-10-02T00:00:00Z",
             "end_time": "2026-10-01T00:00:00Z",
         },
+        {
+            "start_time": datetime.now(UTC) + timedelta(minutes=5),
+        },
     ],
 )
 def test_query_rejects_unsafe_or_unbounded_input(payload: dict[str, object]) -> None:
